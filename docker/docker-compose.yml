@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  openpy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: openpy-agent
+    restart: unless-stopped
+    ports:
+      - "18790:18790"
+    volumes:
+      # Dados persistentes (sobrevivem rebuild)
+      - openpy-data:/root/.openpy/data
+      - openpy-logs:/root/.openpy/logs
+      - openpy-skills:/root/.openpy/skills
+      - openpy-workspace:/root/.openpy/workspace
+      # Config do host (opcional)
+      - ./config:/root/.openpy/config:ro
+    environment:
+      - OPENPY_HOME=/root/.openpy
+      - PYTHONUNBUFFERED=1
+    # O agente não sabe que é Docker
+    hostname: openpy-server
+    # Acesso total à rede (para ngrok, APIs, etc)
+    network_mode: bridge
+
+volumes:
+  openpy-data:
+  openpy-logs:
+  openpy-skills:
+  openpy-workspace:
