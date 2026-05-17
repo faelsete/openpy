@@ -265,12 +265,16 @@ class TelegramBot:
                 loop.run_in_executor(None, self._run_task_sync, text),
                 timeout=120,
             )
-            return result
+            # Enviar resultado direto
+            await self.send_message(chat_id, result)
+            return None  # Sinaliza que ja enviou
         except asyncio.TimeoutError:
-            return "Timeout: tarefa demorou mais de 2 minutos."
+            await self.send_message(chat_id, "Timeout: tarefa demorou mais de 2 minutos.")
+            return None
         except Exception as e:
             logger.error(f"Erro na task async: {traceback.format_exc()}")
-            return f"Erro: {e}"
+            await self.send_message(chat_id, f"Erro: {e}")
+            return None
 
 
 async def run_telegram_polling():
@@ -297,7 +301,8 @@ async def run_telegram_polling():
                 logger.info(f"Mensagem de {chat_id}: {text[:50]}")
 
                 response = await bot.handle_message(message)
-                await bot.send_message(chat_id, response)
+                if response is not None:
+                    await bot.send_message(chat_id, response)
 
         except Exception as e:
             logger.error(f"Erro no polling: {traceback.format_exc()}")
