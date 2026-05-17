@@ -7,10 +7,12 @@ Suporta comandos inline e tarefas em linguagem natural.
 
 import asyncio
 import logging
+import traceback
 from typing import Optional
 
 from openpy.utils.config import load_config
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s')
 logger = logging.getLogger("openpy.telegram")
 
 
@@ -29,26 +31,24 @@ class TelegramBot:
 
     def _is_allowed(self, user_id: int) -> bool:
         if not self.allowed_users:
-            return True  # Se nao tem restricao, permite todos
+            return True
         return user_id in self.allowed_users
 
     async def _api_call(self, method: str, **params) -> dict:
         """Chama a API do Telegram."""
         import httpx
         url = f"https://api.telegram.org/bot{self.token}/{method}"
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(url, json=params)
             return r.json()
 
     async def send_message(self, chat_id: int, text: str, parse_mode: str = "Markdown") -> dict:
         """Envia mensagem."""
-        # Telegram limita a 4096 chars
         if len(text) > 4000:
             text = text[:4000] + "\n\n... (truncado)"
         try:
             return await self._api_call("sendMessage", chat_id=chat_id, text=text, parse_mode=parse_mode)
         except Exception:
-            # Fallback sem parse_mode se markdown falhar
             return await self._api_call("sendMessage", chat_id=chat_id, text=text)
 
     async def get_updates(self) -> list:
@@ -108,13 +108,11 @@ class TelegramBot:
         if text == "/providers":
             return self._list_providers()
 
-        # Tarefa em linguagem natural
-        return self._run_task(text)
+        # Tarefa em linguagem natural — roda em thread separada
+        return await self._run_task_async(text, chat_id)
 
     def _get_status(self) -> str:
-        """Status do sistema."""
-        import shutil
-        import psutil
+        import shutil, psutil
         from pathlib import Path
 
         cpu = psutil.cpu_percent(interval=0.5)
@@ -129,7 +127,6 @@ class TelegramBot:
         )
 
     def _run_doctor(self) -> str:
-        """Roda diagnostico."""
         try:
             from openpy.cli.doctor_cmd import (
                 check_directories, check_config, check_python_deps,
@@ -145,17 +142,16 @@ class TelegramBot:
             errors = 0
             for c in checks:
                 status = c.get("status", "")
-                icon = {"ok": "✅", "warn": "⚠️", "error": "❌", "info": "ℹ️"}.get(status, "❓")
-                lines.append(f"{icon} {c['name']}: {c.get('msg', '')}")
+                icon = {"ok": "OK", "warn": "WARN", "error": "ERRO", "info": "INFO"}.get(status, "?")
+                lines.append(f"[{icon}] {c['name']}: {c.get('msg', '')}")
                 if status == "error":
                     errors += 1
-            lines.append(f"\n{'❌' if errors else '✅'} {errors} erro(s)")
+            lines.append(f"\nTotal: {errors} erro(s)")
             return "\n".join(lines)
         except Exception as e:
             return f"Erro no doctor: {e}"
 
     def _list_skills(self) -> str:
-        """Lista skills."""
         try:
             from openpy.utils.config import get_skills_path
             from pathlib import Path
@@ -173,14 +169,13 @@ class TelegramBot:
 
             lines = ["*Skills Disponiveis*\n"]
             for name, source in skills:
-                icon = "📦" if source == "bundled" else "🧠"
-                lines.append(f"{icon} {name}")
+                tag = "bundled" if source == "bundled" else "learned"
+                lines.append(f"[{tag}] {name}")
             return "\n".join(lines)
         except Exception as e:
             return f"Erro: {e}"
 
     def _get_history(self) -> str:
-        """Historico de tarefas."""
         try:
             from openpy.core.memory import get_recent_tasks
             tasks = get_recent_tasks(limit=5)
@@ -188,62 +183,66 @@ class TelegramBot:
                 return "Nenhuma tarefa no historico."
             lines = ["*Ultimas Tarefas*\n"]
             for t in tasks:
-                status = "✅" if t.get("execution_success") == 1 else "❌" if t.get("execution_success") == 0 else "—"
+                status = "OK" if t.get("execution_success") == 1 else "FAIL" if t.get("execution_success") == 0 else "---"
                 raw = t.get("raw_input", "")[:50]
-                lines.append(f"{status} {raw}")
+                lines.append(f"[{status}] {raw}")
             return "\n".join(lines)
         except Exception as e:
             return f"Erro: {e}"
 
     def _list_providers(self) -> str:
-        """Lista providers."""
         try:
             from openpy.core.cli_providers import ALL_CLI_PROVIDERS
-            lines = ["*Providers CLI*\n"]
+            config = load_config()
+            lines = [
+                "*Provider Ativo*",
+                f"  {config.providers.default.type}/{config.providers.default.model}",
+                "\n*Providers CLI*\n",
+            ]
             for p in ALL_CLI_PROVIDERS:
-                icon = "✅" if p.is_available() else "—"
+                icon = "[OK]" if p.is_available() else "[--]"
                 lines.append(f"{icon} {p.name()}")
             return "\n".join(lines)
         except Exception as e:
             return f"Erro: {e}"
 
-    def _run_task(self, text: str) -> str:
-        """Executa tarefa via pipeline."""
+    def _run_task_sync(self, text: str) -> str:
+        """Executa tarefa via pipeline (sincrono, roda em thread)."""
         try:
             from openpy.core.pipeline import run_task
-            import io
-            from contextlib import redirect_stdout
-
-            # Capturar output do Rich
             result = run_task(text)
 
-            # Montar resposta
             lines = []
             resp = result.llm_response
 
             if isinstance(resp, dict) and "error" not in resp:
                 diag = resp.get("diagnostic", "")
                 if diag:
-                    lines.append(f"*Diagnostico:* {diag}")
+                    lines.append(f"Diagnostico: {diag}")
 
                 risk = resp.get("risk", "")
                 if risk:
-                    lines.append(f"*Risco:* {risk}")
+                    lines.append(f"Risco: {risk}")
 
                 steps = resp.get("steps", [])
                 if steps:
-                    lines.append(f"\n*Plano ({len(steps)} passos):*")
+                    lines.append(f"\nPlano ({len(steps)} passos):")
                     for i, s in enumerate(steps, 1):
                         lines.append(f"{i}. {s.get('description', '')}")
                         for cmd in s.get("commands", []):
-                            lines.append(f"   `{cmd}`")
+                            lines.append(f"   $ {cmd}")
 
                 expected = resp.get("expected_success", "")
                 if expected:
-                    lines.append(f"\n*Esperado:* {expected}")
+                    lines.append(f"\nEsperado: {expected}")
+
+                # Texto livre
+                answer = resp.get("answer", "") or resp.get("response", "") or resp.get("message", "")
+                if answer:
+                    lines.append(f"\n{answer}")
 
             elif isinstance(resp, dict) and "error" in resp:
-                lines.append(f"❌ {resp['error']}")
+                lines.append(f"Erro: {resp['error']}")
             elif isinstance(resp, str):
                 lines.append(resp)
             else:
@@ -252,7 +251,26 @@ class TelegramBot:
             return "\n".join(lines) or "Tarefa processada."
 
         except Exception as e:
+            logger.error(f"Erro executando tarefa: {traceback.format_exc()}")
             return f"Erro ao executar: {e}"
+
+    async def _run_task_async(self, text: str, chat_id: int) -> str:
+        """Executa tarefa em thread separada para nao bloquear o event loop."""
+        # Enviar "processando" antes
+        await self.send_message(chat_id, "Processando tarefa...")
+
+        loop = asyncio.get_event_loop()
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, self._run_task_sync, text),
+                timeout=120,
+            )
+            return result
+        except asyncio.TimeoutError:
+            return "Timeout: tarefa demorou mais de 2 minutos."
+        except Exception as e:
+            logger.error(f"Erro na task async: {traceback.format_exc()}")
+            return f"Erro: {e}"
 
 
 async def run_telegram_polling():
@@ -264,6 +282,7 @@ async def run_telegram_polling():
         return
 
     logger.info("Telegram bot iniciado (polling)")
+    print("OpenPy Telegram Bot iniciado - aguardando mensagens...")
 
     while True:
         try:
@@ -274,13 +293,14 @@ async def run_telegram_polling():
                     continue
 
                 chat_id = message["chat"]["id"]
-                logger.info(f"Mensagem de {chat_id}: {message['text'][:50]}")
+                text = message.get("text", "")
+                logger.info(f"Mensagem de {chat_id}: {text[:50]}")
 
                 response = await bot.handle_message(message)
                 await bot.send_message(chat_id, response)
 
         except Exception as e:
-            logger.error(f"Erro no polling: {e}")
+            logger.error(f"Erro no polling: {traceback.format_exc()}")
             await asyncio.sleep(5)
 
         await asyncio.sleep(1)
