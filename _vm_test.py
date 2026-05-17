@@ -1,79 +1,35 @@
-import paramiko
+import paramiko, json
 
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 ssh.connect('207.180.251.211', username='root', password='14061986', timeout=10)
 
-# Descobrir path correto do venv
-stdin, stdout, stderr = ssh.exec_command('ls /root/openpy/.venv/bin/python* 2>&1; ls /root/.openpy/.venv/bin/python* 2>&1', timeout=10)
-print("VENVS:", stdout.read().decode('utf-8', errors='replace').strip())
+# Ler config atual
+stdin, stdout, stderr = ssh.exec_command('cat ~/.openpy/openpy.json', timeout=10)
+config = json.loads(stdout.read().decode('utf-8'))
 
-# Corrigir service com path correto
-gateway_service = """[Unit]
-Description=OpenPy Gateway + Telegram Bot
-After=network-online.target
-Wants=network-online.target
+# Atualizar provider
+config['providers']['default']['api_key'] = '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'
+config['providers']['default']['model'] = 'nvidia/nemotron-nano-12b-v2-vl'
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/openpy
-ExecStart=/root/openpy/.venv/bin/python -m openpy.gateway.server
-Restart=always
-RestartSec=5
-Environment=PYTHONIOENCODING=utf-8
-Environment=HOME=/root
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=openpy-gateway
-
-[Install]
-WantedBy=multi-user.target
-"""
-
-telegram_service = """[Unit]
-Description=OpenPy Telegram Bot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/openpy
-ExecStart=/root/openpy/.venv/bin/python -m openpy.cli.main telegram
-Restart=always
-RestartSec=5
-Environment=PYTHONIOENCODING=utf-8
-Environment=HOME=/root
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=openpy-telegram
-
-[Install]
-WantedBy=multi-user.target
-"""
-
+# Salvar
 sftp = ssh.open_sftp()
-with sftp.file('/etc/systemd/system/openpy-gateway.service', 'w') as f:
-    f.write(gateway_service)
-with sftp.file('/etc/systemd/system/openpy-telegram.service', 'w') as f:
-    f.write(telegram_service)
+with sftp.file('/root/.openpy/openpy.json', 'w') as f:
+    f.write(json.dumps(config, indent=2, ensure_ascii=False))
 sftp.close()
 
-cmds = [
-    'systemctl daemon-reload',
-    'systemctl restart openpy-telegram',
-    'sleep 3',
-    'systemctl status openpy-telegram --no-pager 2>&1 | head -15',
-    'journalctl -u openpy-telegram --no-pager -n 5 2>&1',
-]
+print("Config atualizada:")
+print(f"  Provider: {config['providers']['default']['type']}")
+print(f"  Model: {config['providers']['default']['model']}")
+print(f"  API Key: {config['providers']['default']['api_key'][:20]}...")
 
-for cmd in cmds:
-    print(f'>>> {cmd}')
-    stdin, stdout, stderr = ssh.exec_command(cmd, timeout=15)
-    out = stdout.read().decode('utf-8', errors='replace').strip()
-    if out: print(out)
-    print()
+# Reiniciar telegram bot
+stdin, stdout, stderr = ssh.exec_command('systemctl restart openpy-telegram', timeout=10)
+stdout.read()
+import time; time.sleep(3)
+
+stdin, stdout, stderr = ssh.exec_command('systemctl is-active openpy-telegram', timeout=5)
+print(f"\nService: {stdout.read().decode().strip()}")
 
 ssh.close()
-print('DONE')
+print("DONE - Manda mensagem pro bot agora!")

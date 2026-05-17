@@ -25,6 +25,20 @@ from openpy.utils.config import load_config
 console = Console(force_terminal=True)
 
 
+def _run_async(coro):
+    """Executa coroutine de forma segura (funciona dentro ou fora de event loop)."""
+    try:
+        loop = asyncio.get_running_loop()
+        # Ja estamos dentro de um event loop (ex: Telegram bot)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result(timeout=300)
+    except RuntimeError:
+        # Nao tem event loop rodando — usar asyncio.run normal
+        return asyncio.run(coro)
+
+
 def run_task(
     raw_input: str,
     model_override: Optional[str] = None,
@@ -122,7 +136,7 @@ def run_task(
         console.print("[bold]C7 EXECUTOR[/bold] — Executando plano...")
         from openpy.core.executor import execute_plan
 
-        execution_result = asyncio.run(
+        execution_result = _run_async(
             execute_plan(
                 task_id=task_id,
                 llm_response=llm_response,
