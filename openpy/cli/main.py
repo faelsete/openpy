@@ -7,6 +7,7 @@ Seguindo arquitetura OpenClaw/Hermes.
 
 import sys
 import os
+from pathlib import Path
 
 # Fix encoding para Windows
 if sys.platform == "win32":
@@ -79,6 +80,90 @@ def telegram_cmd():
     """Iniciar bot Telegram (polling)."""
     from openpy.channels.telegram_bot import start_telegram_bot
     start_telegram_bot()
+
+
+@app.command("systemd")
+def systemd_cmd(
+    action: str = typer.Argument("install", help="install|status|logs|remove"),
+):
+    """Gerenciar servicos systemd (Linux)."""
+    import subprocess
+    import sys
+
+    if sys.platform == "win32":
+        console.print("[yellow]systemd nao disponivel no Windows.[/yellow]")
+        raise typer.Exit(1)
+
+    venv_python = sys.executable
+    workdir = str(Path(__file__).parent.parent.parent.resolve())
+
+    gateway_unit = f"""[Unit]
+Description=OpenPy Gateway + Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={workdir}
+ExecStart={venv_python} -m openpy.gateway.server
+Restart=always
+RestartSec=5
+Environment=PYTHONIOENCODING=utf-8
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openpy-gateway
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    telegram_unit = f"""[Unit]
+Description=OpenPy Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory={workdir}
+ExecStart={venv_python} -m openpy.cli.main telegram
+Restart=always
+RestartSec=5
+Environment=PYTHONIOENCODING=utf-8
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openpy-telegram
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+    if action == "install":
+        from pathlib import Path as P
+        P("/etc/systemd/system/openpy-gateway.service").write_text(gateway_unit)
+        P("/etc/systemd/system/openpy-telegram.service").write_text(telegram_unit)
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "enable", "openpy-gateway", "openpy-telegram"], check=True)
+        console.print("[green]Servicos instalados e habilitados.[/green]")
+        console.print("[dim]Iniciar: systemctl start openpy-gateway openpy-telegram[/dim]")
+
+    elif action == "status":
+        subprocess.run(["systemctl", "status", "openpy-gateway", "openpy-telegram", "--no-pager"])
+
+    elif action == "logs":
+        subprocess.run(["journalctl", "-u", "openpy-gateway", "-u", "openpy-telegram", "--no-pager", "-n", "50"])
+
+    elif action == "remove":
+        subprocess.run(["systemctl", "stop", "openpy-gateway", "openpy-telegram"], check=False)
+        subprocess.run(["systemctl", "disable", "openpy-gateway", "openpy-telegram"], check=False)
+        for f in ["/etc/systemd/system/openpy-gateway.service", "/etc/systemd/system/openpy-telegram.service"]:
+            from pathlib import Path as P
+            P(f).unlink(missing_ok=True)
+        subprocess.run(["systemctl", "daemon-reload"])
+        console.print("[green]Servicos removidos.[/green]")
+    else:
+        console.print("[red]Acao invalida. Use: install|status|logs|remove[/red]")
 
 
 @app.callback()
