@@ -26,12 +26,26 @@ async def lifespan(app: FastAPI):
     """Startup e shutdown do gateway."""
     ensure_directories()
     config = load_config()
-    print(f"🧬 OpenPy Gateway v{__version__} iniciando...")
+    print(f"OpenPy Gateway v{__version__} iniciando...")
     print(f"   Provider: {config.providers.default.type}/{config.providers.default.model}")
     print(f"   Harness: {config.agent.harness_mode}")
     print(f"   Autonomia: {config.agent.autonomy_level}")
+
+    # Iniciar Telegram bot se configurado
+    import asyncio
+    telegram_task = None
+    if config.channels.telegram.enabled and config.channels.telegram.token:
+        from openpy.channels.telegram_bot import run_telegram_polling
+        telegram_task = asyncio.create_task(run_telegram_polling())
+        print("   Telegram: ativo (polling)")
+    else:
+        print("   Telegram: desativado")
+
     yield
-    print("🧬 OpenPy Gateway finalizando...")
+
+    if telegram_task:
+        telegram_task.cancel()
+    print("OpenPy Gateway finalizando...")
 
 
 # ============================================================================

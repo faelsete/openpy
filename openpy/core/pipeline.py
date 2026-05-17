@@ -110,17 +110,12 @@ def run_task(
         validation=validation,
     )
 
-    # Mostrar plano
+    # Mostrar resposta formatada
     console.print("\n")
     has_executable_plan = isinstance(llm_response, dict) and "error" not in llm_response and "steps" in llm_response
 
-    if has_executable_plan:
-        syntax = Syntax(json.dumps(llm_response, indent=2, ensure_ascii=False), "json", theme="monokai")
-        console.print(Panel(syntax, title="Plano Gerado", border_style="green"))
-    elif isinstance(llm_response, str):
-        console.print(Panel(llm_response, title="Resposta", border_style="green"))
-    else:
-        console.print(Panel(str(llm_response), title="Resposta", border_style="yellow"))
+    from openpy.core.formatter import format_response
+    format_response(llm_response)
 
     # ── C7: EXECUTOR ──
     if has_executable_plan and validation["approved"]:

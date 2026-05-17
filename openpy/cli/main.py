@@ -74,6 +74,13 @@ def repl_cmd():
     start_repl()
 
 
+@app.command("telegram")
+def telegram_cmd():
+    """Iniciar bot Telegram (polling)."""
+    from openpy.channels.telegram_bot import start_telegram_bot
+    start_telegram_bot()
+
+
 @app.callback()
 def main(
     version: bool = typer.Option(False, "--version", "-v", help="Mostrar versao"),
